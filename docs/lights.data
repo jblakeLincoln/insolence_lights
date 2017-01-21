@@ -1,0 +1,290 @@
+in vec3 in_vert;
+in vec3 in_norm;
+in vec2 in_uv;
+
+in vec4 in_modelx;
+in vec4 in_modely;
+in vec4 in_modelz;
+in vec4 in_modelw;
+in vec4 in_colour;
+
+out vec3 frag_vert;
+out vec3 frag_pos;
+out vec3 frag_norm;
+out vec2 frag_uv;
+out vec4 frag_colour;
+
+void main() {
+	mat4 model = mat4(in_modelx, in_modely, in_modelz, in_modelw);
+
+	frag_vert = in_vert;
+	frag_norm = in_norm;
+	frag_uv = in_uv;
+	frag_colour = in_colour;
+
+	frag_pos = vec3(model * vec4(in_vert, 1.0));
+#ifdef INSOLENCE_GLSL_DESKTOP
+	frag_norm = mat3(transpose(inverse(model))) * in_norm;
+#endif
+#ifdef INSOLENCE_GLSL_WEB
+	frag_norm = mat3(model) * in_norm;
+#endif
+
+	gl_Position = mat_proj * mat_view * model * vec4(in_vert, 1.0);
+}
+
+
+in vec3 in_verts;
+in vec2 in_uvs;
+in vec4 in_colour;
+
+in vec4 in_modelx;
+in vec4 in_modely;
+in vec4 in_modelz;
+in vec4 in_modelw;
+
+in vec4 in_rect;
+
+out vec4 fs_colour;
+out vec2 fs_uvs;
+
+void main()
+{
+	mat4 model_matrix = mat4(in_modelx, in_modely, in_modelz, in_modelw);
+	fs_colour = in_colour;
+	fs_uvs = in_uvs * in_rect.zw + in_rect.xy;
+
+	gl_Position = mat_proj * mat_view * model_matrix * vec4((in_verts), 1);
+}
+in vec3 frag_vert;
+in vec3 frag_pos;
+in vec3 frag_norm;
+in vec2 frag_uv;
+in vec4 frag_colour;
+
+uniform sampler2D tex_diffuse;
+uniform sampler2D tex_normal;
+uniform bool normal_map;
+
+struct DirLight {
+	vec3 direction;
+	vec3 diffuse;
+	vec3 ambient;
+	vec3 specular;
+};
+
+struct PointLight {
+	vec3 pos;
+
+	float constant;
+	float linear;
+	float quadratic;
+	
+	vec3 diffuse;
+	vec3 ambient;
+	vec3 specular;
+};
+
+#define NUM_POINT_LIGHTS 32
+
+uniform DirLight dir_light;
+uniform PointLight point_lights[NUM_POINT_LIGHTS];
+uniform vec3 view_pos;
+
+vec3 do_dir_light(DirLight light, vec3 norm, vec3 view_dir)
+{
+	vec3 frag_tex = texture(tex_diffuse, frag_uv).xyz;
+	vec3 light_dir = normalize(-light.direction);
+	float diff = max(dot(norm, light_dir), 0.0);
+
+	/* Specular setup. */
+	vec3 reflect_dir = reflect(-light_dir, norm); 
+	float spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0);
+
+	vec3 diffuse = dir_light.diffuse * diff * frag_tex;
+	vec3 ambient = dir_light.ambient * frag_tex;
+	vec3 specular = dir_light.specular * spec;
+
+	return diffuse + ambient + specular;
+}
+
+/*
+vec3 do_point_light(PointLight light, vec3 norm, vec3 view_dir)
+{
+	vec3 frag_tex = texture(tex_diffuse, frag_uv).xyz;
+	vec3 light_dir = normalize(light.pos - frag_pos);
+
+	float diff = max(dot(norm, light_dir), 0.0);
+
+	vec3 reflect_dir = reflect(-light_dir, norm);
+
+	float spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32.0);
+
+	float distance = length(light.pos - frag_pos);
+	float attenuation = 1.0 / (light.constant + light.linear * distance +
+			light.quadratic * (distance * distance));
+
+	vec3 diffuse = light.diffuse * diff * frag_tex;
+	vec3 ambient = light.ambient * frag_tex;
+	vec3 specular = light.specular * spec * frag_tex;
+
+	diffuse *= attenuation;
+	ambient *= attenuation;
+	specular *= attenuation;
+
+	return (diffuse + ambient + specular);
+}
+*/
+
+vec3 do_point_light(PointLight light, vec3 norm, vec3 view_dir)
+{
+	if(light.constant == 0.0)
+		return vec3(0);
+
+	vec3 frag_tex = texture(tex_diffuse, frag_uv).xyz;
+
+	vec3 light_dir = normalize(light.pos - frag_pos);
+	vec3 halfway_dir = normalize(light_dir + view_dir);
+
+	float diff = max(dot(norm, light_dir), 0.0);
+	float spec = pow(max(dot(norm, halfway_dir), 0.0), 1.0);
+
+	float distance = length(light.pos - frag_pos);
+	float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * distance);
+
+	vec3 diffuse = light.diffuse * diff * frag_tex;
+	vec3 ambient = light.ambient * frag_tex;
+	vec3 specular = light.specular * spec * frag_tex;
+
+	diffuse *= attenuation;
+	ambient *= attenuation;
+	specular *= attenuation;
+
+	return (diffuse + ambient + specular);
+}
+
+void main() {
+
+
+	/* Diffuse setup. */
+
+	vec3 norm;
+	vec3 view_dir = normalize(view_pos - frag_pos);
+
+	if(normal_map == false)
+		norm = normalize(frag_norm);
+	else
+	{
+		norm = texture(tex_normal, frag_uv).xyz;
+		norm = normalize(norm * 2.0 - 1.0);
+	}
+
+	//result += do_point_light(point_lights[1], norm, view_dir);
+	vec3 result = do_dir_light(dir_light, norm, view_dir);
+
+	for(int i = 0; i < NUM_POINT_LIGHTS; ++i)
+		result += do_point_light(point_lights[i], norm, view_dir);
+
+	gl_FragColor = vec4(result, 1.0) * frag_colour;
+}
+in vec4 fs_colour;
+in vec2 fs_uvs;
+
+uniform sampler2D tex;
+
+void main()
+{
+	vec4 t = texture(tex, fs_uvs);
+
+	//if(t.a < 0.5)
+	//	discard;
+
+	gl_FragColor = vec4(1, 1, 1, t.r) * fs_colour;
+}
+in vec4 fs_colour;
+in vec2 fs_uvs;
+
+uniform sampler2D tex;
+
+void main()
+{
+	vec4 t = texture(tex, fs_uvs);
+
+	if(t.a < 0.2)
+		discard;
+
+	gl_FragColor = t * fs_colour;
+}
+in vec2 in_verts;
+in vec2 in_uvs;
+in vec2 in_pos;
+in vec4 in_colour;
+in float in_scale;
+
+out vec4 fs_colour;
+
+void main()
+{
+	fs_colour = in_colour;
+	gl_Position = mat_proj * mat_view * vec4(in_verts.xy * in_scale + in_pos.xy, 0.0, 1.0);
+}
+in vec4 fs_colour;
+
+void main()
+{
+	gl_FragColor = vec4(fs_colour);
+}
+# Blender v2.69 (sub 0) OBJ File: 'crate.blend'
+# www.blender.org
+v 1.000000 -1.000000 -1.000000
+v 1.000000 -1.000000 1.000000
+v -1.000000 -1.000000 1.000000
+v -1.000000 -1.000000 -1.000000
+v 1.000000 1.000000 -0.999999
+v 0.999999 1.000000 1.000001
+v -1.000000 1.000000 1.000000
+v -1.000000 1.000000 -1.000000
+vt 0.752084 0.371907
+vt 1.000333 0.371920
+vt 0.752109 0.627440
+vt 0.253796 0.370763
+vt 0.502012 0.372340
+vt 0.254296 0.628160
+vt 0.004696 0.371663
+vt 0.252112 0.373470
+vt 0.004148 0.627967
+vt 0.253665 0.628477
+vt 0.501900 0.628695
+vt 0.253847 0.884545
+vt 0.502334 0.371897
+vt 0.754900 0.372264
+vt 0.502162 0.627514
+vt 0.253882 0.114754
+vt 0.502322 0.114377
+vt 0.253591 0.371201
+vt 1.000013 0.627427
+vt 0.501538 0.628212
+vt 0.253342 0.628263
+vt 0.501309 0.884413
+vt 0.751282 0.627440
+vt 0.501245 0.370492
+vn 0.000000 -1.000000 0.000000
+vn 0.000000 1.000000 0.000000
+vn 1.000000 -0.000000 0.000000
+vn 0.000000 -0.000000 1.000000
+vn -1.000000 -0.000000 -0.000000
+vn 0.000000 0.000000 -1.000000
+vn 1.000000 0.000000 0.000001
+s off
+f 1/1/1 2/2/1 4/3/1
+f 5/4/2 8/5/2 6/6/2
+f 1/7/3 5/8/3 2/9/3
+f 2/10/4 6/11/4 3/12/4
+f 3/13/5 7/14/5 4/15/5
+f 5/16/6 1/17/6 8/18/6
+f 2/2/1 3/19/1 4/3/1
+f 8/5/2 7/20/2 6/6/2
+f 5/8/7 6/21/7 2/9/7
+f 6/11/4 7/22/4 3/12/4
+f 7/14/5 8/23/5 4/15/5
+f 1/17/6 4/24/6 8/18/6
